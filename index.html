@@ -15,9 +15,6 @@
 
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-<script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-firestore-compat.js"></script>
-
 <style>
 
 *{
@@ -700,14 +697,30 @@ id="tabela"
 
 </div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.27.0/firebase-app.js";
+import {
+    getFirestore,
+    collection,
+    doc,
+    addDoc,
+    setDoc,
+    deleteDoc,
+    getDocs,
+    onSnapshot,
+    writeBatch
+} from "https://www.gstatic.com/firebasejs/9.27.0/firebase-firestore.js";
 
 let produtos = [];
 let editando = null;
 let firestore = null;
-const ESTOQUE_DOC_PATH = "estoque/shared";
+const PRODUTOS_COLLECTION = "produtos";
 
 const $ = (id) => document.getElementById(id);
+
+function atualizarStatus(texto) {
+    $("statusUsuario").textContent = texto;
+}
 
 async function inicializarFirebase() {
     const firebaseConfig = {
@@ -725,23 +738,24 @@ async function inicializarFirebase() {
 
     if (!configValida) {
         console.warn("Firebase não está configurado. Os dados serão salvos apenas no dispositivo local.");
-        $("statusUsuario").textContent = "Firebase não está configurado. Usando modo local.";
+        atualizarStatus("Firebase não está configurado. Usando modo local.");
+        carregarProdutosLocal();
+        renderizar();
         return;
     }
 
     try {
-        if (typeof firebase === 'undefined') {
-            throw new Error('Firebase SDK não carregado. Verifique se o firebase-app-compat.js e firebase-firestore-compat.js estão incluídos antes deste script.');
-        }
-
-        firebase.initializeApp(firebaseConfig);
-        firestore = firebase.firestore();
-        $("statusUsuario").textContent = "Conectado ao Firestore. Estoque público compartilhado.";
+        const app = initializeApp(firebaseConfig);
+        firestore = getFirestore(app);
+        atualizarStatus("Conectado ao Firestore. Estoque público compartilhado.");
         await carregarProdutosCloud();
         startRealtimeListener();
         renderizar();
     } catch (error) {
         console.error("Erro ao inicializar Firebase:", error);
+        atualizarStatus("Erro ao conectar com o Firestore. Usando modo local.");
+        carregarProdutosLocal();
+        renderizar();
     }
 }
 
@@ -754,74 +768,90 @@ function normalizarProdutos(lista) {
     });
 }
 
-function mostrarInterface(ativo) {
-    const seletor = ["cards", "cadastro", "pesquisa", "acoes", "tabela"];
-    seletor.forEach(classe => {
-        const elemento = document.querySelector("." + classe);
-        if (elemento) {
-            elemento.classList.toggle("hidden", !ativo);
-        }
-    });
-}
-
-function getEstoqueDocPath() {
-    return ESTOQUE_DOC_PATH;
+function carregarProdutosLocal() {
+    const backupLocal = localStorage.getItem("produtos");
+    produtos = backupLocal ? normalizarProdutos(JSON.parse(backupLocal)) : [];
 }
 
 async function carregarProdutosCloud() {
-    const backupLocal = localStorage.getItem("produtos");
-    produtos = backupLocal ? normalizarProdutos(JSON.parse(backupLocal)) : [];
-
-    const docPath = getEstoqueDocPath();
-    if (!firestore || !docPath) {
+    if (!firestore) {
+        carregarProdutosLocal();
         return;
     }
 
     try {
-        const doc = await firestore.doc(docPath).get();
-        if (doc.exists) {
-            produtos = normalizarProdutos(doc.data().produtos || []);
-            localStorage.setItem("produtos", JSON.stringify(produtos));
-        }
+        const querySnapshot = await getDocs(collection(firestore, PRODUTOS_COLLECTION));
+        produtos = querySnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+        produtos = normalizarProdutos(produtos);
+        salvarLocal();
     } catch (error) {
         console.error("Erro ao carregar produtos da nuvem:", error);
+        carregarProdutosLocal();
     }
 }
 
 function startRealtimeListener() {
-    const docPath = getEstoqueDocPath();
-    if (!firestore || !docPath) return;
+    if (!firestore) return;
 
-    firestore.doc(docPath).onSnapshot((doc) => {
-        if (!doc.exists) return;
-        produtos = normalizarProdutos(doc.data().produtos || []);
-        localStorage.setItem("produtos", JSON.stringify(produtos));
+    const produtosRef = collection(firestore, PRODUTOS_COLLECTION);
+    onSnapshot(produtosRef, (snapshot) => {
+        produtos = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+        produtos = normalizarProdutos(produtos);
+        salvarLocal();
         renderizar();
     }, (error) => {
         console.error("Erro no listener do Firestore:", error);
     });
 }
 
-async function salvarProdutosCloud() {
-    const docPath = getEstoqueDocPath();
-    if (!firestore || !docPath) return;
+function salvarLocal() {
+    localStorage.setItem("produtos", JSON.stringify(produtos));
+}
+
+async function salvarProdutoCloud(produto) {
+    if (!firestore) return;
+
+    const produtoData = { ...produto };
+    delete produtoData.id;
 
     try {
-        await firestore.doc(docPath).set({ produtos });
+        if (produto.id) {
+            await setDoc(doc(firestore, PRODUTOS_COLLECTION, String(produto.id)), produtoData);
+        } else {
+            const novoDoc = await addDoc(collection(firestore, PRODUTOS_COLLECTION), produtoData);
+            produto.id = novoDoc.id;
+        }
     } catch (error) {
-        console.error("Erro ao salvar produtos na nuvem:", error);
+        console.error("Erro ao salvar produto no Firestore:", error);
     }
 }
 
-async function salvarLocal() {
-    localStorage.setItem("produtos", JSON.stringify(produtos));
-    if (firestore) {
-        await salvarProdutosCloud();
+async function excluirProdutoFirestore(id) {
+    if (!firestore) return;
+
+    try {
+        await deleteDoc(doc(firestore, PRODUTOS_COLLECTION, String(id)));
+    } catch (error) {
+        console.error("Erro ao excluir produto no Firestore:", error);
     }
 }
 
-function limparFormulario() {
+async function limparFirestore() {
+    if (!firestore) return;
 
+    try {
+        const snapshot = await getDocs(collection(firestore, PRODUTOS_COLLECTION));
+        const batch = writeBatch(firestore);
+        snapshot.docs.forEach(docSnap => {
+            batch.delete(doc(firestore, PRODUTOS_COLLECTION, docSnap.id));
+        });
+        await batch.commit();
+    } catch (error) {
+        console.error("Erro ao limpar produtos no Firestore:", error);
+    }
+}
+
+async function limparFormulario() {
     $("marca").value = "";
     $("categoria").selectedIndex = 0;
     $("modelo").value = "";
@@ -831,331 +861,194 @@ function limparFormulario() {
     $("localizacao").value = "";
 
     editando = null;
-
     $("btnSalvar").innerHTML = "Salvar Produto";
-
 }
 
 async function salvarProduto() {
-
     const marca = $("marca").value.trim();
-
     if (marca === "") {
         alert("Informe a marca do produto.");
         return;
     }
 
     const produto = {
-
-        id: editando || Date.now(),
-
+        id: editando ? String(editando) : null,
         marca: marca,
-
         categoria: $("categoria").value,
-
         modelo: $("modelo").value,
-
         cor: $("cor").value,
-
         quantidade: Number($("quantidade").value),
-
         valor: Number($("valor").value),
-
         localizacao: $("localizacao").value
-
     };
 
     if (editando) {
-
         const indice = produtos.findIndex(p => p.id === editando);
-
         produtos[indice] = produto;
-
+        await salvarProdutoCloud(produto);
     } else {
-
+        await salvarProdutoCloud(produto);
         produtos.push(produto);
-
     }
 
-    await salvarLocal();
-
-    limparFormulario();
-
+    salvarLocal();
+    await limparFormulario();
     renderizar();
-
 }
 
 function editarProduto(id) {
-
     const produto = produtos.find(p => p.id === id);
-
     if (!produto) return;
 
     editando = id;
-
     $("marca").value = produto.marca;
-
     $("categoria").value = produto.categoria;
-
     $("modelo").value = produto.modelo;
-
     $("cor").value = produto.cor;
-
     $("quantidade").value = produto.quantidade;
-
     $("valor").value = produto.valor;
-
     $("localizacao").value = produto.localizacao;
 
     $("btnSalvar").innerHTML = "Atualizar Produto";
-
-    window.scrollTo({
-        top: 0,
-        behavior: "smooth"
-    });
-
+    window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function excluirProduto(id) {
-
-    if (!confirm("Deseja excluir este produto?"))
-        return;
+    if (!confirm("Deseja excluir este produto?")) return;
 
     produtos = produtos.filter(p => p.id !== id);
-
-    await salvarLocal();
-
+    salvarLocal();
+    await excluirProdutoFirestore(id);
     renderizar();
-
 }
 
 function renderizar() {
-
     const busca = $("pesquisa").value.toLowerCase();
-
     const tabela = $("tabela");
-
     tabela.innerHTML = "";
 
     let totalItens = 0;
-
     let valorTotal = 0;
 
     const lista = produtos.filter(produto => {
-
         return (
-
-            produto.marca.toLowerCase().includes(busca)
-
-            ||
-
-            produto.modelo.toLowerCase().includes(busca)
-
-            ||
-
-            produto.cor.toLowerCase().includes(busca)
-
-            ||
-
-            produto.categoria.toLowerCase().includes(busca)
-
-            ||
-
+            produto.marca.toLowerCase().includes(busca) ||
+            produto.modelo.toLowerCase().includes(busca) ||
+            produto.cor.toLowerCase().includes(busca) ||
+            produto.categoria.toLowerCase().includes(busca) ||
             produto.localizacao.toLowerCase().includes(busca)
-
         );
-
     });
 
     lista.forEach(produto => {
-
         totalItens += produto.quantidade;
-
         valorTotal += produto.quantidade * produto.valor;
-
         tabela.innerHTML += `
-
 <tr>
-
 <td>${produto.marca}</td>
-
 <td>${produto.categoria}</td>
-
 <td>${produto.modelo}</td>
-
 <td>${produto.cor}</td>
-
 <td>${produto.quantidade}</td>
-
 <td>R$ ${produto.valor.toFixed(2)}</td>
-
 <td>${produto.localizacao}</td>
-
 <td>
-
-<button
-class="btnEntrada"
-onclick="entradaEstoque(${produto.id})">
-
-+
-
-</button>
-
-<button
-class="btnSaida"
-onclick="saidaEstoque(${produto.id})">
-
--
-
-</button>
-
-<button
-class="btnEditar"
-onclick="editarProduto(${produto.id})">
-
-Editar
-
-</button>
-
-<button
-class="btnExcluir"
-onclick="excluirProduto(${produto.id})">
-
-Excluir
-
-</button>
-
+<button class="btnEntrada" onclick="entradaEstoque('${produto.id}')">+</button>
+<button class="btnSaida" onclick="saidaEstoque('${produto.id}')">-</button>
+<button class="btnEditar" onclick="editarProduto('${produto.id}')">Editar</button>
+<button class="btnExcluir" onclick="excluirProduto('${produto.id}')">Excluir</button>
 </td>
-
 </tr>
-
 `;
-
     });
 
     $("totalProdutos").innerHTML = lista.length;
-
     $("totalItens").innerHTML = totalItens;
-
-    $("valorTotal").innerHTML =
-        "R$ " + valorTotal.toFixed(2);
-
+    $("valorTotal").innerHTML = "R$ " + valorTotal.toFixed(2);
 }
 
-renderizar();
-
-async function entradaEstoque(id){
-
+async function entradaEstoque(id) {
     const produto = produtos.find(p => p.id === id);
+    if (!produto) return;
 
-    if(!produto) return;
-
-    const qtd = Number(prompt("Quantidade de entrada:",1));
-
-    if(isNaN(qtd) || qtd <= 0) return;
+    const qtd = Number(prompt("Quantidade de entrada:", 1));
+    if (isNaN(qtd) || qtd <= 0) return;
 
     produto.quantidade += qtd;
-
-    await salvarLocal();
-
+    await salvarProdutoCloud(produto);
+    salvarLocal();
     renderizar();
-
 }
 
-async function saidaEstoque(id){
-
+async function saidaEstoque(id) {
     const produto = produtos.find(p => p.id === id);
+    if (!produto) return;
 
-    if(!produto) return;
-
-    const qtd = Number(prompt("Quantidade de saída:",1));
-
-    if(isNaN(qtd) || qtd <= 0) return;
-
-    if(qtd > produto.quantidade){
-
+    const qtd = Number(prompt("Quantidade de saída:", 1));
+    if (isNaN(qtd) || qtd <= 0) return;
+    if (qtd > produto.quantidade) {
         alert("Quantidade maior que o estoque.");
-
         return;
-
     }
 
     produto.quantidade -= qtd;
-
-    await salvarLocal();
-
+    await salvarProdutoCloud(produto);
+    salvarLocal();
     renderizar();
-
 }
 
-function exportarBackup(){
-
-    const json = JSON.stringify(produtos,null,4);
-
-    const blob = new Blob([json],{
-
-        type:"application/json"
-
-    });
-
+function exportarBackup() {
+    const json = JSON.stringify(produtos, null, 4);
+    const blob = new Blob([json], { type: "application/json" });
     const link = document.createElement("a");
-
     link.href = URL.createObjectURL(blob);
-
     link.download = "backup-smartassist.json";
-
     link.click();
-
 }
 
-async function importarBackup(event){
-
+async function importarBackup(event) {
     const arquivo = event.target.files[0];
-
-    if(!arquivo) return;
+    if (!arquivo) return;
 
     const reader = new FileReader();
-
-    reader.onload = async function(e){
-
-        produtos = JSON.parse(e.target.result);
-
-        await salvarLocal();
-
+    reader.onload = async function (e) {
+        produtos = normalizarProdutos(JSON.parse(e.target.result));
+        salvarLocal();
+        await limparFirestore();
+        for (const produto of produtos) {
+            delete produto.id;
+            await salvarProdutoCloud(produto);
+        }
         renderizar();
-
         alert("Backup importado com sucesso!");
-
-    }
-
+    };
     reader.readAsText(arquivo);
-
 }
 
-async function limparTudo(){
+async function limparTudo() {
+    if (!confirm("Apagar TODOS os produtos?")) return;
 
-    if(!confirm("Apagar TODOS os produtos?"))
-
-        return;
-
-    produtos=[];
-
-    await salvarLocal();
-
+    produtos = [];
+    salvarLocal();
+    await limparFirestore();
     renderizar();
-
 }
 
-/* ==========================================================
-   MENSAGEM AO ABRIR O SISTEMA
-========================================================== */
-
-window.onload = async function() {
+window.onload = async function () {
     await inicializarFirebase();
     renderizar();
     console.log("SmartAssist carregado.");
-}
+};
 
+window.salvarProduto = salvarProduto;
+window.editarProduto = editarProduto;
+window.excluirProduto = excluirProduto;
+window.entradaEstoque = entradaEstoque;
+window.saidaEstoque = saidaEstoque;
+window.exportarBackup = exportarBackup;
+window.importarBackup = importarBackup;
+window.limparTudo = limparTudo;
+window.renderizar = renderizar;
 </script>
 
 </body>
