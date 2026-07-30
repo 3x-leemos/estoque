@@ -730,6 +730,10 @@ async function inicializarFirebase() {
     }
 
     try {
+        if (typeof firebase === 'undefined') {
+            throw new Error('Firebase SDK não carregado. Verifique se o firebase-app-compat.js e firebase-firestore-compat.js estão incluídos antes deste script.');
+        }
+
         firebase.initializeApp(firebaseConfig);
         firestore = firebase.firestore();
         $("statusUsuario").textContent = "Conectado ao Firestore. Estoque público compartilhado.";
@@ -738,7 +742,6 @@ async function inicializarFirebase() {
         renderizar();
     } catch (error) {
         console.error("Erro ao inicializar Firebase:", error);
-        $("statusUsuario").textContent = "Erro ao inicializar Firebase. Veja o console.";
     }
 }
 
@@ -1146,8 +1149,7 @@ function limparTudo(){
 ========================================================== */
 
 window.onload = async function() {
-    inicializarFirebase();
-    await carregarProdutosCloud();
+    await inicializarFirebase();
     renderizar();
     console.log("SmartAssist carregado.");
 }
