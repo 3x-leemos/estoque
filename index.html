@@ -16,7 +16,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
 <script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-firestore-compat.js"></script>
 
 <style>
@@ -327,27 +326,7 @@ td{
 
 </header>
 
-<section class="login">
-    <h2>Entrar no SmartAssist</h2>
-    <div class="grid">
-        <div>
-            <label for="email">Email</label>
-            <input id="email" type="email" autocomplete="email" placeholder="seu@email.com">
-        </div>
-        <div>
-            <label for="senha">Senha</label>
-            <input id="senha" type="password" autocomplete="current-password" placeholder="********">
-        </div>
-        <div class="botaoSalvar">
-            <button id="btnEntrar" onclick="signIn()">Entrar</button>
-        </div>
-        <div class="botaoSalvar">
-            <button id="btnCadastrar" onclick="signUp()">Cadastrar</button>
-        </div>
-    </div>
-    <p id="statusUsuario" style="margin-top:12px;color:#6b7280;"></p>
-    <button id="btnSair" class="limpar hidden" onclick="signOut()">Sair</button>
-</section>
+<p id="statusUsuario" style="margin-top:12px;color:#6b7280;">Carregando estoque compartilhado...</p>
 
 <section class="cards">
 
@@ -726,13 +705,11 @@ id="tabela"
 let produtos = [];
 let editando = null;
 let firestore = null;
-let auth = null;
-let usuarioAtual = null;
-let firebaseIniciado = false;
+const ESTOQUE_DOC_PATH = "estoque/shared";
 
 const $ = (id) => document.getElementById(id);
 
-function inicializarFirebase() {
+async function inicializarFirebase() {
     const firebaseConfig = {
         apiKey: "AIzaSyAAqvdY8BCxU39QJbLlJcCIFECYpIq3er0",
         authDomain: "smartassist-estoque.firebaseapp.com",
@@ -754,23 +731,11 @@ function inicializarFirebase() {
 
     try {
         firebase.initializeApp(firebaseConfig);
-        auth = firebase.auth();
         firestore = firebase.firestore();
-        firebaseIniciado = true;
-        auth.onAuthStateChanged(async (user) => {
-            usuarioAtual = user;
-            if (user) {
-                $("statusUsuario").textContent = "Logado como " + user.email;
-                $("btnSair").classList.remove("hidden");
-                await carregarProdutosCloud();
-                renderizar();
-                mostrarInterface(true);
-            } else {
-                $("statusUsuario").textContent = "Faça login para acessar o estoque.";
-                $("btnSair").classList.add("hidden");
-                mostrarInterface(false);
-            }
-        });
+        $("statusUsuario").textContent = "Conectado ao Firestore. Estoque público compartilhado.";
+        await carregarProdutosCloud();
+        startRealtimeListener();
+        renderizar();
     } catch (error) {
         console.error("Erro ao inicializar Firebase:", error);
         $("statusUsuario").textContent = "Erro ao inicializar Firebase. Veja o console.";
@@ -797,8 +762,7 @@ function mostrarInterface(ativo) {
 }
 
 function getEstoqueDocPath() {
-    if (!usuarioAtual) return null;
-    return `users/${usuarioAtual.uid}/estoque`;
+    return ESTOQUE_DOC_PATH;
 }
 
 async function carregarProdutosCloud() {
@@ -821,6 +785,20 @@ async function carregarProdutosCloud() {
     }
 }
 
+function startRealtimeListener() {
+    const docPath = getEstoqueDocPath();
+    if (!firestore || !docPath) return;
+
+    firestore.doc(docPath).onSnapshot((doc) => {
+        if (!doc.exists) return;
+        produtos = normalizarProdutos(doc.data().produtos || []);
+        localStorage.setItem("produtos", JSON.stringify(produtos));
+        renderizar();
+    }, (error) => {
+        console.error("Erro no listener do Firestore:", error);
+    });
+}
+
 async function salvarProdutosCloud() {
     const docPath = getEstoqueDocPath();
     if (!firestore || !docPath) return;
@@ -835,51 +813,6 @@ async function salvarProdutosCloud() {
 function salvarLocal() {
     localStorage.setItem("produtos", JSON.stringify(produtos));
     salvarProdutosCloud();
-}
-
-function signIn() {
-    if (!auth) {
-        alert("Firebase não está configurado. Entre com os dados localmente.");
-        return;
-    }
-
-    const email = $("email").value.trim();
-    const senha = $("senha").value.trim();
-
-    if (!email || !senha) {
-        alert("Preencha email e senha.");
-        return;
-    }
-
-    auth.signInWithEmailAndPassword(email, senha)
-        .catch(error => {
-            alert("Erro ao entrar: " + error.message);
-        });
-}
-
-function signUp() {
-    if (!auth) {
-        alert("Firebase não está configurado. Entre com os dados localmente.");
-        return;
-    }
-
-    const email = $("email").value.trim();
-    const senha = $("senha").value.trim();
-
-    if (!email || !senha) {
-        alert("Preencha email e senha.");
-        return;
-    }
-
-    auth.createUserWithEmailAndPassword(email, senha)
-        .catch(error => {
-            alert("Erro ao cadastrar: " + error.message);
-        });
-}
-
-function signOut() {
-    if (!auth) return;
-    auth.signOut();
 }
 
 function limparFormulario() {
@@ -1214,10 +1147,7 @@ function limparTudo(){
 
 window.onload = async function() {
     inicializarFirebase();
-    if (!auth) {
-        await carregarProdutosCloud();
-        mostrarInterface(false);
-    }
+    await carregarProdutosCloud();
     renderizar();
     console.log("SmartAssist carregado.");
 }
