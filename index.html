@@ -15,6 +15,9 @@
 
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
+<script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.27.0/firebase-firestore-compat.js"></script>
+
 <style>
 
 *{
@@ -348,7 +351,7 @@ Cadastrar Produto
 
 <label>
 
-Nome
+Marca
 
 </label>
 
@@ -356,9 +359,9 @@ Nome
 
 type="text"
 
-id="nome"
+id="marca"
 
-placeholder="Capinha Transparente"
+placeholder="Apple"
 
 >
 
@@ -610,7 +613,7 @@ Limpar Tudo
 
 <th>
 
-Nome
+Marca
 
 </th>
 
@@ -676,19 +679,70 @@ id="tabela"
 
 <script>
 
-let produtos = JSON.parse(localStorage.getItem("produtos")) || [];
-
+let produtos = [];
 let editando = null;
+let firestore = null;
 
 const $ = (id) => document.getElementById(id);
 
+function inicializarFirebase() {
+    const firebaseConfig = {
+        apiKey: "SUA_API_KEY",
+        authDomain: "SEU_AUTH_DOMAIN",
+        projectId: "SEU_PROJECT_ID",
+        storageBucket: "SEU_STORAGE_BUCKET",
+        messagingSenderId: "SEU_MESSAGING_SENDER_ID",
+        appId: "SEU_APP_ID"
+    };
+
+    try {
+        firebase.initializeApp(firebaseConfig);
+        firestore = firebase.firestore();
+    } catch (error) {
+        console.error("Erro ao inicializar Firebase:", error);
+    }
+}
+
+async function carregarProdutosCloud() {
+    const backupLocal = localStorage.getItem("produtos");
+
+    if (!firestore) {
+        produtos = backupLocal ? JSON.parse(backupLocal) : [];
+        return;
+    }
+
+    try {
+        const doc = await firestore.doc("smartassist/estoque").get();
+        if (doc.exists) {
+            produtos = doc.data().produtos || [];
+            localStorage.setItem("produtos", JSON.stringify(produtos));
+        } else {
+            produtos = backupLocal ? JSON.parse(backupLocal) : [];
+        }
+    } catch (error) {
+        console.error("Erro ao carregar produtos da nuvem:", error);
+        produtos = backupLocal ? JSON.parse(backupLocal) : [];
+    }
+}
+
+async function salvarProdutosCloud() {
+    if (!firestore) return;
+
+    try {
+        await firestore.doc("smartassist/estoque").set({ produtos });
+    } catch (error) {
+        console.error("Erro ao salvar produtos na nuvem:", error);
+    }
+}
+
 function salvarLocal() {
     localStorage.setItem("produtos", JSON.stringify(produtos));
+    salvarProdutosCloud();
 }
 
 function limparFormulario() {
 
-    $("nome").value = "";
+    $("marca").value = "";
     $("categoria").selectedIndex = 0;
     $("modelo").value = "";
     $("cor").value = "";
@@ -704,10 +758,10 @@ function limparFormulario() {
 
 function salvarProduto() {
 
-    const nome = $("nome").value.trim();
+    const marca = $("marca").value.trim();
 
-    if (nome === "") {
-        alert("Informe o nome do produto.");
+    if (marca === "") {
+        alert("Informe a marca do produto.");
         return;
     }
 
@@ -715,7 +769,7 @@ function salvarProduto() {
 
         id: editando || Date.now(),
 
-        nome: nome,
+        marca: marca,
 
         categoria: $("categoria").value,
 
@@ -759,7 +813,7 @@ function editarProduto(id) {
 
     editando = id;
 
-    $("nome").value = produto.nome;
+    $("marca").value = produto.marca;
 
     $("categoria").value = produto.categoria;
 
@@ -811,7 +865,7 @@ function renderizar() {
 
         return (
 
-            produto.nome.toLowerCase().includes(busca)
+            produto.marca.toLowerCase().includes(busca)
 
             ||
 
@@ -843,7 +897,7 @@ function renderizar() {
 
 <tr>
 
-<td>${produto.nome}</td>
+<td>${produto.marca}</td>
 
 <td>${produto.categoria}</td>
 
@@ -1016,14 +1070,12 @@ function limparTudo(){
    MENSAGEM AO ABRIR O SISTEMA
 ========================================================== */
 
-window.onload=function(){
-
+window.onload = async function() {
+    inicializarFirebase();
+    await carregarProdutosCloud();
     renderizar();
-
     console.log("SmartAssist carregado.");
-
 }
-
 
 </script>
 
