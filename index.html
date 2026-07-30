@@ -703,25 +703,34 @@ function inicializarFirebase() {
     }
 }
 
+function normalizarProdutos(lista) {
+    return lista.map(produto => {
+        if (!produto.marca && produto.nome) {
+            produto.marca = produto.nome;
+        }
+        return produto;
+    });
+}
+
 async function carregarProdutosCloud() {
     const backupLocal = localStorage.getItem("produtos");
 
     if (!firestore) {
-        produtos = backupLocal ? JSON.parse(backupLocal) : [];
+        produtos = backupLocal ? normalizarProdutos(JSON.parse(backupLocal)) : [];
         return;
     }
 
     try {
         const doc = await firestore.doc("smartassist/estoque").get();
         if (doc.exists) {
-            produtos = doc.data().produtos || [];
+            produtos = normalizarProdutos(doc.data().produtos || []);
             localStorage.setItem("produtos", JSON.stringify(produtos));
         } else {
-            produtos = backupLocal ? JSON.parse(backupLocal) : [];
+            produtos = backupLocal ? normalizarProdutos(JSON.parse(backupLocal)) : [];
         }
     } catch (error) {
         console.error("Erro ao carregar produtos da nuvem:", error);
-        produtos = backupLocal ? JSON.parse(backupLocal) : [];
+        produtos = backupLocal ? normalizarProdutos(JSON.parse(backupLocal)) : [];
     }
 }
 
