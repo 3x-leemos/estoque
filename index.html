@@ -728,6 +728,7 @@ let editando = null;
 let firestore = null;
 let auth = null;
 let usuarioAtual = null;
+let firebaseIniciado = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -747,6 +748,7 @@ function inicializarFirebase() {
 
     if (!configValida) {
         console.warn("Firebase não está configurado. Os dados serão salvos apenas no dispositivo local.");
+        $("statusUsuario").textContent = "Firebase não está configurado. Usando modo local.";
         return;
     }
 
@@ -754,6 +756,7 @@ function inicializarFirebase() {
         firebase.initializeApp(firebaseConfig);
         auth = firebase.auth();
         firestore = firebase.firestore();
+        firebaseIniciado = true;
         auth.onAuthStateChanged(async (user) => {
             usuarioAtual = user;
             if (user) {
@@ -770,6 +773,7 @@ function inicializarFirebase() {
         });
     } catch (error) {
         console.error("Erro ao inicializar Firebase:", error);
+        $("statusUsuario").textContent = "Erro ao inicializar Firebase. Veja o console.";
     }
 }
 
