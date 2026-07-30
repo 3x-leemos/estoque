@@ -813,9 +813,11 @@ async function salvarProdutosCloud() {
     }
 }
 
-function salvarLocal() {
+async function salvarLocal() {
     localStorage.setItem("produtos", JSON.stringify(produtos));
-    salvarProdutosCloud();
+    if (firestore) {
+        await salvarProdutosCloud();
+    }
 }
 
 function limparFormulario() {
@@ -834,7 +836,7 @@ function limparFormulario() {
 
 }
 
-function salvarProduto() {
+async function salvarProduto() {
 
     const marca = $("marca").value.trim();
 
@@ -875,7 +877,7 @@ function salvarProduto() {
 
     }
 
-    salvarLocal();
+    await salvarLocal();
 
     limparFormulario();
 
@@ -914,14 +916,14 @@ function editarProduto(id) {
 
 }
 
-function excluirProduto(id) {
+async function excluirProduto(id) {
 
     if (!confirm("Deseja excluir este produto?"))
         return;
 
     produtos = produtos.filter(p => p.id !== id);
 
-    salvarLocal();
+    await salvarLocal();
 
     renderizar();
 
@@ -1042,7 +1044,7 @@ Excluir
 
 renderizar();
 
-function entradaEstoque(id){
+async function entradaEstoque(id){
 
     const produto = produtos.find(p => p.id === id);
 
@@ -1054,13 +1056,13 @@ function entradaEstoque(id){
 
     produto.quantidade += qtd;
 
-    salvarLocal();
+    await salvarLocal();
 
     renderizar();
 
 }
 
-function saidaEstoque(id){
+async function saidaEstoque(id){
 
     const produto = produtos.find(p => p.id === id);
 
@@ -1080,7 +1082,7 @@ function saidaEstoque(id){
 
     produto.quantidade -= qtd;
 
-    salvarLocal();
+    await salvarLocal();
 
     renderizar();
 
@@ -1106,7 +1108,7 @@ function exportarBackup(){
 
 }
 
-function importarBackup(event){
+async function importarBackup(event){
 
     const arquivo = event.target.files[0];
 
@@ -1114,11 +1116,11 @@ function importarBackup(event){
 
     const reader = new FileReader();
 
-    reader.onload = function(e){
+    reader.onload = async function(e){
 
         produtos = JSON.parse(e.target.result);
 
-        salvarLocal();
+        await salvarLocal();
 
         renderizar();
 
@@ -1130,7 +1132,7 @@ function importarBackup(event){
 
 }
 
-function limparTudo(){
+async function limparTudo(){
 
     if(!confirm("Apagar TODOS os produtos?"))
 
@@ -1138,7 +1140,7 @@ function limparTudo(){
 
     produtos=[];
 
-    salvarLocal();
+    await salvarLocal();
 
     renderizar();
 
