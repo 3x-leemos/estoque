@@ -701,22 +701,17 @@ id="tabela"
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.27.0/firebase-app.js";
 import {
     getFirestore,
-    collection,
     doc,
-    addDoc,
     setDoc,
-    deleteDoc,
-    getDocs,
     getDoc,
-    onSnapshot,
-    writeBatch
+    onSnapshot
 } from "https://www.gstatic.com/firebasejs/9.27.0/firebase-firestore.js";
 
 let produtos = [];
 let editando = null;
 let firestore = null;
-const PRODUTOS_COLLECTION = "produtos";
-const OLD_ESTOQUE_DOC_PATH = ["estoque", "shared"];
+const ESTOQUE_COLLECTION = "estoque";
+const ESTOQUE_DOCUMENT = "shared";
 
 const $ = (id) => document.getElementById(id);
 
@@ -782,12 +777,11 @@ async function carregarProdutosCloud() {
     }
 
     try {
-        const produtosRef = collection(firestore, PRODUTOS_COLLECTION);
-        const querySnapshot = await getDocs(produtosRef);
+        const estoqueDoc = doc(firestore, ESTOQUE_COLLECTION, ESTOQUE_DOCUMENT);
+        const snapshot = await getDoc(estoqueDoc);
 
-        if (!querySnapshot.empty) {
-            produtos = querySnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-            produtos = normalizarProdutos(produtos);
+        if (snapshot.exists()) {
+            produtos = normalizarProdutos(snapshot.data().produtos || []);
             salvarLocal();
             return;
         }
@@ -795,17 +789,8 @@ async function carregarProdutosCloud() {
         const backupLocal = localStorage.getItem("produtos");
         if (backupLocal) {
             produtos = normalizarProdutos(JSON.parse(backupLocal));
-            await sincronizarLocalParaFirestore(produtos);
+            await salvarProdutosCloud();
             salvarLocal();
-            return;
-        }
-
-        const docRef = doc(firestore, ...OLD_ESTOQUE_DOC_PATH);
-        const oldDoc = await getDoc(docRef);
-        if (oldDoc.exists()) {
-            produtos = normalizarProdutos(oldDoc.data().produtos || []);
-            salvarLocal();
-            await migrarProdutosDocParaColecao(produtos);
             return;
         }
 
@@ -816,63 +801,16 @@ async function carregarProdutosCloud() {
     }
 }
 
-async function sincronizarLocalParaFirestore(produtosArray) {
-    if (!firestore || !produtosArray.length) return;
-
-    try {
-        for (const produto of produtosArray) {
-            if (produto.id) {
-                await setDoc(doc(firestore, PRODUTOS_COLLECTION, String(produto.id)), {
-                    marca: produto.marca,
-                    categoria: produto.categoria,
-                    modelo: produto.modelo,
-                    cor: produto.cor,
-                    quantidade: produto.quantidade,
-                    valor: produto.valor,
-                    localizacao: produto.localizacao
-                });
-            } else {
-                const novoDoc = await addDoc(collection(firestore, PRODUTOS_COLLECTION), {
-                    marca: produto.marca,
-                    categoria: produto.categoria,
-                    modelo: produto.modelo,
-                    cor: produto.cor,
-                    quantidade: produto.quantidade,
-                    valor: produto.valor,
-                    localizacao: produto.localizacao
-                });
-                produto.id = novoDoc.id;
-            }
-        }
-    } catch (error) {
-        console.error("Erro ao sincronizar local para o Firestore:", error);
-    }
-}
-
-async function migrarProdutosDocParaColecao(produtosArray) {
-    if (!firestore || !produtosArray.length) return;
-
-    try {
-        const batch = writeBatch(firestore);
-        produtosArray.forEach(produto => {
-            const produtoData = { ...produto };
-            delete produtoData.id;
-            const novoDoc = doc(collection(firestore, PRODUTOS_COLLECTION));
-            batch.set(novoDoc, produtoData);
-        });
-        await batch.commit();
-    } catch (error) {
-        console.error("Erro ao migrar produtos para a coleção:", error);
-    }
-}
-
 function startRealtimeListener() {
     if (!firestore) return;
 
-    const produtosRef = collection(firestore, PRODUTOS_COLLECTION);
-    onSnapshot(produtosRef, (snapshot) => {
-        produtos = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-        produtos = normalizarProdutos(produtos);
+    const estoqueDoc = doc(firestore, ESTOQUE_COLLECTION, ESTOQUE_DOCUMENT);
+    onSnapshot(estoqueDoc, (snapshot) => {
+        if (!snapshot.exists()) {
+            return;
+        }
+
+        produtos = normalizarProdutos(snapshot.data().produtos || []);
         salvarLocal();
         renderizar();
     }, (error) => {
@@ -884,46 +822,13 @@ function salvarLocal() {
     localStorage.setItem("produtos", JSON.stringify(produtos));
 }
 
-async function salvarProdutoCloud(produto) {
-    if (!firestore) return;
-
-    const produtoData = { ...produto };
-    delete produtoData.id;
-
-    try {
-        if (produto.id) {
-            await setDoc(doc(firestore, PRODUTOS_COLLECTION, String(produto.id)), produtoData);
-        } else {
-            const novoDoc = await addDoc(collection(firestore, PRODUTOS_COLLECTION), produtoData);
-            produto.id = novoDoc.id;
-        }
-    } catch (error) {
-        console.error("Erro ao salvar produto no Firestore:", error);
-    }
-}
-
-async function excluirProdutoFirestore(id) {
+async function salvarProdutosCloud() {
     if (!firestore) return;
 
     try {
-        await deleteDoc(doc(firestore, PRODUTOS_COLLECTION, String(id)));
+        await setDoc(doc(firestore, ESTOQUE_COLLECTION, ESTOQUE_DOCUMENT), { produtos });
     } catch (error) {
-        console.error("Erro ao excluir produto no Firestore:", error);
-    }
-}
-
-async function limparFirestore() {
-    if (!firestore) return;
-
-    try {
-        const snapshot = await getDocs(collection(firestore, PRODUTOS_COLLECTION));
-        const batch = writeBatch(firestore);
-        snapshot.docs.forEach(docSnap => {
-            batch.delete(doc(firestore, PRODUTOS_COLLECTION, docSnap.id));
-        });
-        await batch.commit();
-    } catch (error) {
-        console.error("Erro ao limpar produtos no Firestore:", error);
+        console.error("Erro ao salvar produtos no Firestore:", error);
     }
 }
 
@@ -948,7 +853,7 @@ async function salvarProduto() {
     }
 
     const produto = {
-        id: editando ? String(editando) : null,
+        id: editando ? String(editando) : String(Date.now()),
         marca: marca,
         categoria: $("categoria").value,
         modelo: $("modelo").value,
@@ -959,21 +864,20 @@ async function salvarProduto() {
     };
 
     if (editando) {
-        const indice = produtos.findIndex(p => p.id === editando);
+        const indice = produtos.findIndex(p => String(p.id) === String(editando));
         produtos[indice] = produto;
-        await salvarProdutoCloud(produto);
     } else {
-        await salvarProdutoCloud(produto);
         produtos.push(produto);
     }
 
     salvarLocal();
+    await salvarProdutosCloud();
     await limparFormulario();
     renderizar();
 }
 
 function editarProduto(id) {
-    const produto = produtos.find(p => p.id === id);
+    const produto = produtos.find(p => String(p.id) === String(id));
     if (!produto) return;
 
     editando = id;
@@ -992,9 +896,9 @@ function editarProduto(id) {
 async function excluirProduto(id) {
     if (!confirm("Deseja excluir este produto?")) return;
 
-    produtos = produtos.filter(p => p.id !== id);
+    produtos = produtos.filter(p => String(p.id) !== String(id));
     salvarLocal();
-    await excluirProdutoFirestore(id);
+    await salvarProdutosCloud();
     renderizar();
 }
 
@@ -1051,8 +955,8 @@ async function entradaEstoque(id) {
     if (isNaN(qtd) || qtd <= 0) return;
 
     produto.quantidade += qtd;
-    await salvarProdutoCloud(produto);
     salvarLocal();
+    await salvarProdutosCloud();
     renderizar();
 }
 
@@ -1068,8 +972,8 @@ async function saidaEstoque(id) {
     }
 
     produto.quantidade -= qtd;
-    await salvarProdutoCloud(produto);
     salvarLocal();
+    await salvarProdutosCloud();
     renderizar();
 }
 
@@ -1090,11 +994,7 @@ async function importarBackup(event) {
     reader.onload = async function (e) {
         produtos = normalizarProdutos(JSON.parse(e.target.result));
         salvarLocal();
-        await limparFirestore();
-        for (const produto of produtos) {
-            delete produto.id;
-            await salvarProdutoCloud(produto);
-        }
+        await salvarProdutosCloud();
         renderizar();
         alert("Backup importado com sucesso!");
     };
@@ -1106,7 +1006,7 @@ async function limparTudo() {
 
     produtos = [];
     salvarLocal();
-    await limparFirestore();
+    await salvarProdutosCloud();
     renderizar();
 }
 
