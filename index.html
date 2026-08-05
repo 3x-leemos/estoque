@@ -419,6 +419,69 @@
       border-color: var(--accent);
     }
 
+    .variant-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .variant-row {
+      display: grid;
+      grid-template-columns: 1.4fr 0.8fr 0.8fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .variant-row .field {
+      margin-bottom: 0;
+    }
+
+    .variant-row input {
+      background: var(--surface);
+    }
+
+    .variant-delete {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .variant-delete:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .variant-list-view {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .variant-row-view {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface-2);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+
+    .variant-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      flex-shrink: 0;
+    }
+
+    .variant-row-view.low-stock span {
+      color: var(--danger);
+    }
+
     .row2 {
       display: flex;
       gap: 10px;
@@ -571,26 +634,13 @@
         <input type="text" id="fAparelho" placeholder="Ex: iPhone 14" />
       </div>
       <div class="field">
-        <label for="fCor">Cor</label>
-        <input type="text" id="fCor" placeholder="Ex: Azul, Preto..." />
-      </div>
-      <div class="field">
         <label for="fQualidade">Qualidade</label>
         <input type="text" id="fQualidade" placeholder="Ex: Original, 1ª linha..." />
       </div>
-      <div class="color-preview">
-        <div class="dot" id="colorDot" style="background:#8A8F9C;"></div>
-        <span>Pré-visualização da cor</span>
-      </div>
-      <div class="row2">
-        <div class="field">
-          <label for="fQtd">Quantidade</label>
-          <input type="number" id="fQtd" placeholder="0" min="0" />
-        </div>
-        <div class="field">
-          <label for="fValor">Valor unitário (R$)</label>
-          <input type="number" id="fValor" placeholder="0,00" min="0" step="0.01" />
-        </div>
+      <div class="field">
+        <label>Cores disponíveis</label>
+        <div class="variant-list" id="variantList"></div>
+        <button class="btn btn-ghost" id="addVariantBtn" type="button" style="margin-top: 8px;">Adicionar cor</button>
       </div>
       <div class="sheet-actions">
         <button class="btn btn-ghost" id="cancelBtn" type="button">Cancelar</button>
@@ -612,6 +662,8 @@
 
   <script>
     const STORAGE_KEY = 'estoque-capinhas-peliculas:itens';
+    const REMOTE_STORAGE_URL = 'https://www.jsonstore.io/estoque-capinhas-peliculas';
+    const SYNC_POLL_MS = 5000;
     let itens = [];
     let editingId = null;
     let activeTab = 'Todos';
@@ -655,20 +707,58 @@
 
     function saveItems() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(itens));
+      saveRemoteItems();
     }
 
-    function loadItems(silent = false) {
+    async function saveRemoteItems() {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        const fresh = raw ? JSON.parse(raw) : [];
-        if (JSON.stringify(fresh) !== JSON.stringify(itens)) {
-          itens = fresh;
-          render();
-          if (silent) showToast('Estoque atualizado');
+        const response = await fetch(REMOTE_STORAGE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: itens, updatedAt: Date.now() })
+        });
+        const result = await response.json();
+        if (!result || (!result.ok && !result.result)) {
+          throw new Error('Não foi possível salvar no servidor');
         }
       } catch (e) {
-        itens = itens || [];
-        render();
+        console.warn('Sync remoto falhou:', e);
+      }
+    }
+
+    async function loadItems(silent = false) {
+      let loadedRemote = false;
+
+      try {
+        const response = await fetch(REMOTE_STORAGE_URL);
+        if (response.ok) {
+          const result = await response.json();
+          const fresh = result && result.result && result.result.items ? result.result.items : [];
+          if (JSON.stringify(fresh) !== JSON.stringify(itens)) {
+            itens = fresh.map(item => ({ ...item, variantes: item.variantes || [] }));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(itens));
+            render();
+            if (silent) showToast('Estoque atualizado');
+          }
+          loadedRemote = true;
+        }
+      } catch (e) {
+        console.warn('Falha ao carregar dados remotos:', e);
+      }
+
+      if (!loadedRemote) {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          const fresh = raw ? JSON.parse(raw) : [];
+          if (JSON.stringify(fresh) !== JSON.stringify(itens)) {
+            itens = fresh.map(item => ({ ...item, variantes: item.variantes || [] }));
+            render();
+            if (silent) showToast('Estoque atualizado');
+          }
+        } catch (e) {
+          itens = itens || [];
+          render();
+        }
       }
     }
 
@@ -683,15 +773,22 @@
     }
 
     function render() {
-      const total = itens.reduce((s, i) => s + (i.quantidade * i.valor), 0);
-      const totalUnidades = itens.reduce((s, i) => s + i.quantidade, 0);
+      const total = itens.reduce((s, i) => {
+        const variants = i.variantes || [];
+        return s + variants.reduce((sum, v) => sum + (v.quantidade * v.valor), 0);
+      }, 0);
+      const totalUnidades = itens.reduce((s, i) => {
+        const variants = i.variantes || [];
+        return s + variants.reduce((sum, v) => sum + v.quantidade, 0);
+      }, 0);
       document.getElementById('totalValue').innerHTML = `R$ <span>${fmtMoney(total)}</span>`;
-      document.getElementById('subStats').textContent = `${itens.length} itens cadastrados · ${totalUnidades} unidades em estoque`;
+      document.getElementById('subStats').textContent = `${itens.length} modelos cadastrados · ${totalUnidades} unidades em estoque`;
 
       const filtered = itens.filter(i => {
         const matchesTab = activeTab === 'Todos' || i.tipo === activeTab;
         const term = searchTerm.toLowerCase();
-        const matchesSearch = !term || i.aparelho.toLowerCase().includes(term) || i.cor.toLowerCase().includes(term);
+        const variants = i.variantes || [];
+        const matchesSearch = !term || i.aparelho.toLowerCase().includes(term) || variants.some(v => v.cor.toLowerCase().includes(term));
         return matchesTab && matchesSearch;
       });
 
@@ -708,22 +805,15 @@
 
       filtered.sort((a, b) => a.aparelho.localeCompare(b.aparelho));
       list.innerHTML = filtered.map(i => {
-        const subtotal = i.quantidade * i.valor;
-        const low = i.quantidade <= 2;
+        const variants = i.variantes || [];
+        const subtotal = variants.reduce((sum, v) => sum + v.quantidade * v.valor, 0);
         return `
           <div class="item-card">
-            <div class="color-bar" style="background:${colorFor(i.cor)}"></div>
             <div class="item-body">
               <div class="item-top">
-                <div class="item-name">${escapeHtml(i.aparelho)}</div>
-                <div class="item-tag">${escapeHtml(i.tipo)}</div>
-              </div>
-              <div class="item-meta">${escapeHtml(i.cor)}${i.qualidade ? ' · ' + escapeHtml(i.qualidade) : ''}</div>
-              <div class="item-bottom">
-                <div class="item-nums">
-                  <span class="${low ? 'low-stock' : ''}">${low ? '⚠ ' : ''}<b>${i.quantidade}</b> un.</span>
-                  <span>R$ <b>${fmtMoney(i.valor)}</b> un.</span>
-                  <span>= <b>R$ ${fmtMoney(subtotal)}</b></span>
+                <div>
+                  <div class="item-name">${escapeHtml(i.aparelho)}</div>
+                  <div class="item-meta">${escapeHtml(i.tipo)}${i.qualidade ? ' · ' + escapeHtml(i.qualidade) : ''}</div>
                 </div>
                 <div class="item-actions">
                   <button class="icon-btn" onclick="openEdit('${i.id}')">
@@ -734,21 +824,72 @@
                   </button>
                 </div>
               </div>
+              <div class="variant-list-view">
+                ${i.variantes.map(v => {
+                  const low = v.quantidade <= 2;
+                  return `
+                    <div class="variant-row-view ${low ? 'low-stock' : ''}">
+                      <span class="variant-color" style="background:${colorFor(v.cor)}"></span>
+                      <span>${escapeHtml(v.cor)} · <b>${v.quantidade}</b> un · R$ <b>${fmtMoney(v.valor)}</b></span>
+                    </div>`;
+                }).join('')}
+              </div>
+              <div class="item-bottom">
+                <div class="item-nums">
+                  <span><b>${fmtMoney(subtotal)}</b> no total</span>
+                </div>
+              </div>
             </div>
           </div>`;
       }).join('');
+    }
+
+    function createVariantRow(variant = {}) {
+      const rowId = variant.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      return `
+        <div class="variant-row" data-id="${rowId}">
+          <div class="field">
+            <input type="text" class="variant-cor" placeholder="Cor" value="${escapeHtml(variant.cor || '')}" />
+          </div>
+          <div class="field">
+            <input type="number" class="variant-quantidade" placeholder="Qtd" min="0" value="${variant.quantidade != null ? variant.quantidade : ''}" />
+          </div>
+          <div class="field">
+            <input type="number" class="variant-valor" placeholder="Valor" min="0" step="0.01" value="${variant.valor != null ? variant.valor : ''}" />
+          </div>
+          <button class="variant-delete" type="button">✕</button>
+        </div>`;
+    }
+
+    function renderVariantRows(variantes = []) {
+      const variantList = document.getElementById('variantList');
+      variantList.innerHTML = '';
+      if (variantes.length === 0) {
+        variantes = [{ id: Date.now().toString(36), cor: '', quantidade: '', valor: '' }];
+      }
+      variantes.forEach(variant => {
+        variantList.insertAdjacentHTML('beforeend', createVariantRow(variant));
+      });
+    }
+
+    function getVariantRows() {
+      return Array.from(document.querySelectorAll('.variant-row')).map(row => {
+        return {
+          id: row.dataset.id,
+          cor: row.querySelector('.variant-cor').value.trim(),
+          quantidade: parseInt(row.querySelector('.variant-quantidade').value, 10) || 0,
+          valor: parseFloat(row.querySelector('.variant-valor').value) || 0
+        };
+      }).filter(v => v.cor || v.quantidade || v.valor);
     }
 
     function openOverlay() {
       editingId = null;
       document.getElementById('sheetTitle').textContent = 'Novo item';
       document.getElementById('fAparelho').value = '';
-      document.getElementById('fCor').value = '';
       document.getElementById('fQualidade').value = '';
-      document.getElementById('fQtd').value = '';
-      document.getElementById('fValor').value = '';
       setTypeToggle('Capinha');
-      updateColorPreview();
+      renderVariantRows([]);
       document.getElementById('overlay').classList.add('show');
     }
 
@@ -758,12 +899,9 @@
       editingId = id;
       document.getElementById('sheetTitle').textContent = 'Editar item';
       document.getElementById('fAparelho').value = item.aparelho;
-      document.getElementById('fCor').value = item.cor;
       document.getElementById('fQualidade').value = item.qualidade;
-      document.getElementById('fQtd').value = item.quantidade;
-      document.getElementById('fValor').value = item.valor;
       setTypeToggle(item.tipo);
-      updateColorPreview();
+      renderVariantRows(item.variantes || []);
       document.getElementById('overlay').classList.add('show');
     };
 
@@ -786,38 +924,34 @@
       return btn ? btn.dataset.tipo : 'Capinha';
     }
 
-    function updateColorPreview() {
-      const cor = document.getElementById('fCor').value;
-      document.getElementById('colorDot').style.background = colorFor(cor);
-    }
-
     function saveItem() {
       const aparelho = document.getElementById('fAparelho').value.trim();
-      const cor = document.getElementById('fCor').value.trim();
       const qualidade = document.getElementById('fQualidade').value.trim();
-      const quantidade = parseInt(document.getElementById('fQtd').value, 10) || 0;
-      const valor = parseFloat(document.getElementById('fValor').value) || 0;
       const tipo = getSelectedType();
+      const variantes = getVariantRows().filter(v => v.cor && v.quantidade > 0 && v.valor >= 0);
 
       if (!aparelho) {
         showToast('Informe o aparelho');
         return;
       }
 
+      if (variantes.length === 0) {
+        showToast('Adicione ao menos uma cor válida');
+        return;
+      }
+
       if (editingId) {
         const idx = itens.findIndex(i => i.id === editingId);
         if (idx > -1) {
-          itens[idx] = { ...itens[idx], aparelho, cor, qualidade, quantidade, valor, tipo };
+          itens[idx] = { ...itens[idx], aparelho, qualidade, tipo, variantes };
         }
       } else {
         itens.push({
           id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
           aparelho,
-          cor,
           qualidade,
-          quantidade,
-          valor,
-          tipo
+          tipo,
+          variantes
         });
       }
 
@@ -832,7 +966,16 @@
       document.getElementById('overlay').classList.remove('show');
     });
     document.getElementById('saveBtn').addEventListener('click', saveItem);
-    document.getElementById('fCor').addEventListener('input', updateColorPreview);
+    document.getElementById('addVariantBtn').addEventListener('click', () => {
+      const variantList = document.getElementById('variantList');
+      variantList.insertAdjacentHTML('beforeend', createVariantRow({ id: Date.now().toString(36) }));
+    });
+    document.getElementById('variantList').addEventListener('click', (e) => {
+      const deleteBtn = e.target.closest('.variant-delete');
+      if (!deleteBtn) return;
+      const row = deleteBtn.closest('.variant-row');
+      if (row) row.remove();
+    });
 
     document.getElementById('typeToggle').addEventListener('click', (e) => {
       const btn = e.target.closest('button');
@@ -876,9 +1019,10 @@
       });
     });
 
-    loadItems();
-    render();
-    syncTimer = setInterval(() => loadItems(true), 5000);
+    loadItems().then(() => {
+      render();
+      syncTimer = setInterval(() => loadItems(true), SYNC_POLL_MS);
+    });
   </script>
 </body>
 </html>
